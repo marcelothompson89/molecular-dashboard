@@ -9,7 +9,7 @@ import re
 
 # Configuración de la página
 st.set_page_config(
-    page_title="Dashboard Similitud Molecular",
+    page_title="Dashboard Molecular por País",
     page_icon="🧬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -19,7 +19,6 @@ st.set_page_config(
 @st.cache_data
 def load_data():
     try:
-        # Cargar ambas hojas del Excel
         moleculas_compartidas = pd.read_excel('Resumen_similitud_moleculas.xlsx', 
                                             sheet_name='Moleculas compartidas')
         moleculas_unicas = pd.read_excel('Resumen_similitud_moleculas.xlsx', 
@@ -29,247 +28,456 @@ def load_data():
         st.error(f"Error al cargar los datos: {e}")
         return None, None
 
-# Función para procesar datos de países
-def procesar_paises(df):
-    paises_count = {}
-    paises_moleculas = {}
+# Función para filtrar datos excluyendo países
+def filtrar_datos_excluidos(df_compartidas, df_unicas, paises_excluidos):
+    """Filtra los dataframes excluyendo los países especificados"""
     
-    for _, row in df.iterrows():
-        paises = [p.strip() for p in row['Países'].split(',')]
-        molecula = row['Molécula_normalizada']
+    # Filtrar moléculas únicas
+    df_unicas_filtrado = df_unicas[~df_unicas['País'].isin(paises_excluidos)].copy()
+    
+    # Filtrar moléculas compartidas
+    df_compartidas_filtrado = df_compartidas.copy()
+    
+    # Filtrar filas que solo contengan países excluidos
+    indices_a_eliminar = []
+    for idx, row in df_compartidas_filtrado.iterrows():
+        paises_en_fila = [p.strip() for p in row['Países'].split(',')]
+        paises_restantes = [p for p in paises_en_fila if p not in paises_excluidos]
         
-        for pais in paises:
-            if pais not in paises_count:
-                paises_count[pais] = 0
-                paises_moleculas[pais] = []
-            paises_count[pais] += 1
-            paises_moleculas[pais].append(molecula)
+        if len(paises_restantes) == 0:
+            # Si no quedan países, eliminar la fila
+            indices_a_eliminar.append(idx)
+        elif len(paises_restantes) == 1:
+            # Si solo queda un país, también eliminar (ya no es compartida)
+            indices_a_eliminar.append(idx)
+        else:
+            # Actualizar la columna Países para reflejar solo los países no excluidos
+            df_compartidas_filtrado.at[idx, 'Países'] = ', '.join(paises_restantes)
     
-    return paises_count, paises_moleculas
+    df_compartidas_filtrado = df_compartidas_filtrado.drop(indices_a_eliminar)
+    
+    return df_compartidas_filtrado, df_unicas_filtrado
 
-# Función para crear matriz de similitud
-def crear_matriz_similitud(df):
-    paises_set = set()
-    for _, row in df.iterrows():
+# Función para obtener información del país (sin cambios)
+def obtener_info_pais(pais_seleccionado, df_compartidas, df_unicas):
+    """Obtiene toda la información relevante del país seleccionado"""
+    
+    # Moléculas únicas del país
+    moleculas_unicas_pais = []
+    cantidad_unicas = 0
+    if pais_seleccionado in df_unicas['País'].values:
+        fila_pais = df_unicas[df_unicas['País'] == pais_seleccionado].iloc[0]
+        cantidad_unicas = fila_pais['Cantidad de moléculas únicas']
+        moleculas_unicas_pais = fila_pais['Moléculas únicas'].split(', ') if pd.notna(fila_pais['Moléculas únicas']) else []
+    
+    # Moléculas compartidas por el país
+    moleculas_compartidas_pais = df_compartidas[
+        df_compartidas['Países'].str.contains(pais_seleccionado, na=False)
+    ].copy()
+    
+    # Colaboraciones con otros países
+    colaboraciones = {}
+    moleculas_por_colaboracion = {}
+    
+    for _, row in moleculas_compartidas_pais.iterrows():
         paises = [p.strip() for p in row['Países'].split(',')]
-        paises_set.update(paises)
+        otros_paises = [p for p in paises if p != pais_seleccionado]
+        
+        for otro_pais in otros_paises:
+            if otro_pais not in colaboraciones:
+                colaboraciones[otro_pais] = 0
+                moleculas_por_colaboracion[otro_pais] = []
+            
+            colaboraciones[otro_pais] += 1
+            moleculas_por_colaboracion[otro_pais].append(row['Molécula_normalizada'])
     
-    paises_list = sorted(list(paises_set))
-    matriz = np.zeros((len(paises_list), len(paises_list)))
+    # Moléculas más compartidas del país
+    moleculas_mas_compartidas = []
+    for _, row in moleculas_compartidas_pais.iterrows():
+        num_paises = len(row['Países'].split(','))
+        otros_paises = [p.strip() for p in row['Países'].split(',') if p.strip() != pais_seleccionado]
+        
+        moleculas_mas_compartidas.append({
+            'Molécula': row['Molécula_normalizada'],
+            'Número_Países': num_paises - 1,  # Excluir el país seleccionado
+            'Otros_Países': ', '.join(otros_paises),
+            'Países_Lista': otros_paises
+        })
     
-    for _, row in df.iterrows():
-        paises = [p.strip() for p in row['Países'].split(',')]
-        for i, pais1 in enumerate(paises_list):
-            for j, pais2 in enumerate(paises_list):
-                if pais1 in paises and pais2 in paises:
-                    matriz[i][j] += 1
+    moleculas_mas_compartidas = sorted(moleculas_mas_compartidas, 
+                                     key=lambda x: x['Número_Países'], reverse=True)
     
-    return matriz, paises_list
-
-# Título principal
-st.title("🧬 Dashboard de Similitud Molecular entre Países")
-st.markdown("---")
+    return {
+        'moleculas_unicas': moleculas_unicas_pais,
+        'cantidad_unicas': cantidad_unicas,
+        'colaboraciones': colaboraciones,
+        'moleculas_por_colaboracion': moleculas_por_colaboracion,
+        'moleculas_mas_compartidas': moleculas_mas_compartidas,
+        'total_compartidas': len(moleculas_compartidas_pais),
+        'paises_colaboradores': len(colaboraciones)
+    }
 
 # Cargar datos
 df_compartidas, df_unicas = load_data()
 
 if df_compartidas is not None and df_unicas is not None:
     
-    # Sidebar con información general
-    st.sidebar.title("📊 Resumen General")
-    st.sidebar.metric("Total Moléculas Compartidas", len(df_compartidas))
-    st.sidebar.metric("Países con Moléculas Únicas", len(df_unicas))
+    # Obtener lista de todos los países (datos originales)
+    paises_compartidas = set()
+    for _, row in df_compartidas.iterrows():
+        paises = [p.strip() for p in row['Países'].split(',')]
+        paises_compartidas.update(paises)
     
-    # Procesar datos
-    paises_count, paises_moleculas = procesar_paises(df_compartidas)
+    paises_unicas = set(df_unicas['País'].tolist())
+    todos_los_paises_original = sorted(list(paises_compartidas.union(paises_unicas)))
     
-    # Layout principal en columnas
-    col1, col2 = st.columns([2, 1])
+    # HEADER PRINCIPAL
+    st.title("🧬 Análisis Molecular por País")
+    st.markdown("*Explora la información molecular centrada en cada país*")
+    st.markdown("---")
+    
+    # NUEVA SECCIÓN: FILTROS DE EXCLUSIÓN
+    st.markdown("### ⚙️ Configuración de Filtros")
+    
+    # Crear expander para los filtros (colapsable para no ocupar mucho espacio)
+    with st.expander("🚫 Excluir países del análisis", expanded=False):
+        st.markdown("Selecciona los países que deseas **excluir** del análisis completo:")
+        
+        # Crear columnas para organizar mejor la selección
+        col_excl1, col_excl2 = st.columns([3, 1])
+        
+        with col_excl1:
+            paises_a_excluir = st.multiselect(
+                "Países a excluir:",
+                options=todos_los_paises_original,
+                default=[],
+                help="Los países seleccionados serán eliminados de todo el análisis"
+            )
+        
+        with col_excl2:
+            if paises_a_excluir:
+                st.markdown("**Países excluidos:**")
+                for pais in paises_a_excluir:
+                    st.write(f"❌ {pais}")
+            else:
+                st.info("Ningún país excluido")
+        
+        # Botón para limpiar filtros
+        if st.button("🔄 Limpiar filtros"):
+            st.rerun()
+    
+    # Aplicar filtros de exclusión
+    if paises_a_excluir:
+        df_compartidas_filtrado, df_unicas_filtrado = filtrar_datos_excluidos(
+            df_compartidas, df_unicas, paises_a_excluir
+        )
+        
+        # Mostrar información sobre el filtrado
+        st.info(f"📊 **Filtros aplicados:** Se han excluido {len(paises_a_excluir)} países del análisis")
+    else:
+        df_compartidas_filtrado = df_compartidas.copy()
+        df_unicas_filtrado = df_unicas.copy()
+    
+    # Recalcular lista de países disponibles después del filtro
+    paises_compartidas_filtrado = set()
+    for _, row in df_compartidas_filtrado.iterrows():
+        paises = [p.strip() for p in row['Países'].split(',')]
+        paises_compartidas_filtrado.update(paises)
+    
+    paises_unicas_filtrado = set(df_unicas_filtrado['País'].tolist())
+    todos_los_paises = sorted(list(paises_compartidas_filtrado.union(paises_unicas_filtrado)))
+    
+    # Verificar si hay países disponibles
+    if not todos_los_paises:
+        st.error("❌ No hay países disponibles después de aplicar los filtros.")
+        st.stop()
+    
+    st.markdown("---")
+    
+    # SELECCIÓN DE PAÍS PRINCIPAL
+    col_header1, col_header2 = st.columns([2, 1])
+    
+    with col_header1:
+        pais_seleccionado = st.selectbox(
+            "🌍 **Selecciona el país de análisis:**",
+            todos_los_paises,
+            index=0
+        )
+    
+    with col_header2:
+        st.markdown(f"### 📍 Analizando: **{pais_seleccionado}**")
+        if paises_a_excluir:
+            st.caption(f"*Datos filtrados - {len(paises_a_excluir)} países excluidos*")
+    
+    # Obtener información del país seleccionado (usando datos filtrados)
+    info_pais = obtener_info_pais(pais_seleccionado, df_compartidas_filtrado, df_unicas_filtrado)
+    
+    # MÉTRICAS PRINCIPALES
+    st.markdown("### 📊 Resumen del País")
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.subheader("🌍 Países con Mayor Número de Moléculas Compartidas")
-        
-        # Top 15 países
-        top_paises = dict(sorted(paises_count.items(), key=lambda x: x[1], reverse=True)[:15])
-        
-        fig_bar = px.bar(
-            x=list(top_paises.values()),
-            y=list(top_paises.keys()),
-            orientation='h',
-            title="Número de Moléculas Compartidas por País",
-            labels={'x': 'Número de Moléculas', 'y': 'País'},
-            color=list(top_paises.values()),
-            color_continuous_scale='viridis'
+        st.metric(
+            label="🔬 Moléculas Únicas",
+            value=info_pais['cantidad_unicas']
         )
-        fig_bar.update_layout(height=600, showlegend=False)
-        st.plotly_chart(fig_bar, use_container_width=True)
     
     with col2:
-        st.subheader("🔬 Moléculas Únicas por País")
-        
-        # Gráfico de barras para moléculas únicas
-        fig_unique = px.bar(
-            df_unicas,
-            x='Cantidad de moléculas únicas',
-            y='País',
-            orientation='h',
-            title="Moléculas Únicas",
-            color='Cantidad de moléculas únicas',
-            color_continuous_scale='plasma'
+        st.metric(
+            label="🤝 Moléculas Compartidas", 
+            value=info_pais['total_compartidas']
         )
-        fig_unique.update_layout(height=400, showlegend=False)
-        st.plotly_chart(fig_unique, use_container_width=True)
-        
-        # Mostrar detalles de moléculas únicas
-        st.subheader("📋 Detalles de Moléculas Únicas")
-        pais_seleccionado = st.selectbox(
-            "Selecciona un país:",
-            df_unicas['País'].tolist()
-        )
-        
-        if pais_seleccionado:
-            moleculas_pais = df_unicas[df_unicas['País'] == pais_seleccionado]['Moléculas únicas'].iloc[0]
-            st.text_area(
-                f"Moléculas únicas de {pais_seleccionado}:",
-                moleculas_pais,
-                height=150
-            )
-    
-    # Sección de matriz de similitud
-    st.markdown("---")
-    st.subheader("🔥 Matriz de Similitud Molecular")
-    
-    # Crear matriz de similitud para los top países
-    top_10_paises = list(dict(sorted(paises_count.items(), key=lambda x: x[1], reverse=True)[:10]).keys())
-    
-    # Calcular similitud entre top países
-    matriz_similitud = np.zeros((len(top_10_paises), len(top_10_paises)))
-    
-    for i, pais1 in enumerate(top_10_paises):
-        for j, pais2 in enumerate(top_10_paises):
-            if i != j:
-                # Contar moléculas compartidas entre dos países específicos
-                compartidas = 0
-                for _, row in df_compartidas.iterrows():
-                    paises_row = [p.strip() for p in row['Países'].split(',')]
-                    if pais1 in paises_row and pais2 in paises_row:
-                        compartidas += 1
-                matriz_similitud[i][j] = compartidas
-            else:
-                matriz_similitud[i][j] = paises_count[pais1]
-    
-    # Heatmap de similitud
-    fig_heatmap = px.imshow(
-        matriz_similitud,
-        x=top_10_paises,
-        y=top_10_paises,
-        color_continuous_scale='RdYlBu_r',
-        title="Moléculas Compartidas entre Países (Top 10)",
-        aspect="auto"
-    )
-    fig_heatmap.update_xaxes(side="bottom")
-    fig_heatmap.update_layout(height=500)
-    st.plotly_chart(fig_heatmap, use_container_width=True)
-    
-    # Análisis de redes
-    st.markdown("---")
-    st.subheader("🌐 Análisis de Colaboración Molecular")
-    
-    col3, col4 = st.columns(2)
     
     with col3:
-        # Distribución del número de países por molécula
-        paises_por_molecula = [len(row['Países'].split(',')) for _, row in df_compartidas.iterrows()]
-        
-        fig_dist = px.histogram(
-            x=paises_por_molecula,
-            nbins=20,
-            title="Distribución: Número de Países por Molécula",
-            labels={'x': 'Número de Países', 'y': 'Frecuencia'},
-            color_discrete_sequence=['skyblue']
+        st.metric(
+            label="🌍 Países Colaboradores",
+            value=info_pais['paises_colaboradores']
         )
-        st.plotly_chart(fig_dist, use_container_width=True)
     
     with col4:
+        total_moleculas = info_pais['cantidad_unicas'] + info_pais['total_compartidas']
+        st.metric(
+            label="🧬 Total Moléculas",
+            value=total_moleculas
+        )
+    
+    st.markdown("---")
+    
+    # SECCIÓN 1: MOLÉCULAS ÚNICAS
+    st.markdown("### 🔬 Moléculas Únicas del País")
+    
+    if info_pais['moleculas_unicas']:
+        col_unique1, col_unique2 = st.columns([1, 2])
+        
+        with col_unique1:
+            st.info(f"**{pais_seleccionado}** tiene **{len(info_pais['moleculas_unicas'])}** moléculas únicas")
+            
+            # Opción para mostrar/ocultar la lista
+            mostrar_lista = st.checkbox("Mostrar lista completa de moléculas únicas")
+        
+        with col_unique2:
+            if mostrar_lista:
+                # Crear DataFrame para mejor visualización
+                df_unicas_display = pd.DataFrame({
+                    'Molécula Única': info_pais['moleculas_unicas']
+                })
+                df_unicas_display.index = df_unicas_display.index + 1
+                st.dataframe(df_unicas_display, height=300)
+    else:
+        st.warning(f"**{pais_seleccionado}** no tiene moléculas únicas registradas.")
+    
+    st.markdown("---")
+    
+    # SECCIÓN 2: COLABORACIONES CON OTROS PAÍSES
+    st.markdown("### 🤝 Colaboraciones Moleculares")
+    
+    if info_pais['colaboraciones']:
+        # Top colaboradores
+        top_colaboradores = dict(sorted(info_pais['colaboraciones'].items(), 
+                                      key=lambda x: x[1], reverse=True)[:10])
+        
+        col_collab1, col_collab2 = st.columns([2, 1])
+        
+        with col_collab1:
+            # Gráfico de barras de colaboraciones
+            fig_collab = px.bar(
+                x=list(top_colaboradores.values()),
+                y=list(top_colaboradores.keys()),
+                orientation='h',
+                title=f"Top Países que Colaboran con {pais_seleccionado}",
+                labels={'x': 'Moléculas Compartidas', 'y': 'País'},
+                color=list(top_colaboradores.values()),
+                color_continuous_scale='viridis'
+            )
+            fig_collab.update_layout(height=400, showlegend=False)
+            st.plotly_chart(fig_collab, use_container_width=True)
+        
+        with col_collab2:
+            st.markdown("#### 🔍 Explorar Colaboración")
+            pais_colaborador = st.selectbox(
+                "Selecciona un país colaborador:",
+                list(top_colaboradores.keys())
+            )
+            
+            if pais_colaborador:
+                num_moleculas = info_pais['colaboraciones'][pais_colaborador]
+                st.metric(f"Moléculas con {pais_colaborador}", num_moleculas)
+                
+                # Mostrar algunas moléculas compartidas
+                moleculas_ejemplo = info_pais['moleculas_por_colaboracion'][pais_colaborador][:5]
+                st.markdown("**Ejemplos de moléculas compartidas:**")
+                for i, molecula in enumerate(moleculas_ejemplo, 1):
+                    st.write(f"{i}. {molecula[:60]}{'...' if len(molecula) > 60 else ''}")
+                
+                if len(info_pais['moleculas_por_colaboracion'][pais_colaborador]) > 5:
+                    st.write(f"... y {len(info_pais['moleculas_por_colaboracion'][pais_colaborador]) - 5} más")
+    else:
+        st.warning(f"**{pais_seleccionado}** no tiene colaboraciones moleculares registradas.")
+    
+    st.markdown("---")
+    
+    # SECCIÓN 3: MOLÉCULAS MÁS COMPARTIDAS
+    st.markdown("### 🏆 Moléculas Más Compartidas del País")
+    
+    if info_pais['moleculas_mas_compartidas']:
         # Top moléculas más compartidas
-        st.subheader("🏆 Top Moléculas Más Compartidas")
+        top_moleculas = info_pais['moleculas_mas_compartidas'][:10]
         
-        moleculas_mas_compartidas = []
-        for _, row in df_compartidas.iterrows():
-            num_paises = len(row['Países'].split(','))
-            moleculas_mas_compartidas.append({
-                'Molécula': row['Molécula_normalizada'][:50] + "..." if len(row['Molécula_normalizada']) > 50 else row['Molécula_normalizada'],
-                'Número de Países': num_paises
-            })
+        col_mol1, col_mol2 = st.columns([2, 1])
         
-        df_top_moleculas = pd.DataFrame(moleculas_mas_compartidas)
-        df_top_moleculas = df_top_moleculas.sort_values('Número de Países', ascending=False).head(10)
+        with col_mol1:
+            # Preparar datos para el gráfico
+            df_top_mol = pd.DataFrame([
+                {
+                    'Molécula': mol['Molécula'][:50] + "..." if len(mol['Molécula']) > 50 else mol['Molécula'],
+                    'Países': mol['Número_Países']
+                }
+                for mol in top_moleculas
+            ])
+            
+            fig_mol = px.bar(
+                df_top_mol,
+                x='Países',
+                y='Molécula',
+                orientation='h',
+                title=f"Moléculas de {pais_seleccionado} Más Compartidas",
+                labels={'x': 'Número de Países', 'y': 'Molécula'},
+                color='Países',
+                color_continuous_scale='plasma'
+            )
+            fig_mol.update_layout(height=400, showlegend=False)
+            st.plotly_chart(fig_mol, use_container_width=True)
         
-        fig_mol = px.bar(
-            df_top_moleculas,
-            x='Número de Países',
-            y='Molécula',
-            orientation='h',
-            title="Top 10 Moléculas por Número de Países",
-            color='Número de Países',
-            color_continuous_scale='viridis'
-        )
-        fig_mol.update_layout(height=400, showlegend=False)
-        st.plotly_chart(fig_mol, use_container_width=True)
+        with col_mol2:
+            st.markdown("#### 🔬 Detalle de Molécula")
+            molecula_idx = st.selectbox(
+                "Selecciona una molécula:",
+                range(min(10, len(top_moleculas))),
+                format_func=lambda x: f"Top {x+1}: {top_moleculas[x]['Molécula'][:30]}..."
+            )
+            
+            mol_seleccionada = top_moleculas[molecula_idx]
+            st.metric("Países que la comparten", mol_seleccionada['Número_Países'])
+            
+            st.markdown("**Países:**")
+            paises_texto = mol_seleccionada['Otros_Países']
+            st.text_area("", paises_texto, height=100, disabled=True)
+    else:
+        st.warning(f"**{pais_seleccionado}** no tiene moléculas compartidas registradas.")
     
-    # Explorador de datos
     st.markdown("---")
-    st.subheader("🔍 Explorador de Datos")
     
-    # Filtros
-    col5, col6 = st.columns(2)
+    # SECCIÓN 4: EXPLORADOR DE DATOS DETALLADO
+    st.markdown("### 🔍 Explorador de Datos Detallado")
     
-    with col5:
-        pais_filtro = st.selectbox(
-            "Filtrar por país:",
-            ['Todos'] + sorted(list(paises_count.keys()))
+    # Filtros avanzados
+    col_filter1, col_filter2, col_filter3 = st.columns(3)
+    
+    with col_filter1:
+        tipo_molecula = st.selectbox(
+            "Tipo de molécula:",
+            ["Todas", "Solo Únicas", "Solo Compartidas"]
         )
     
-    with col6:
-        min_paises = st.slider(
-            "Mínimo número de países por molécula:",
-            min_value=2,
-            max_value=max(paises_por_molecula),
-            value=2
+    with col_filter2:
+        min_colaboradores = st.slider(
+            "Mínimo países colaboradores:",
+            min_value=1,
+            max_value=max([mol['Número_Países'] for mol in info_pais['moleculas_mas_compartidas']] + [1]),
+            value=1
+        ) if info_pais['moleculas_mas_compartidas'] else 1
+    
+    with col_filter3:
+        buscar_texto = st.text_input("Buscar en nombres de moléculas:")
+    
+    # Preparar datos filtrados
+    datos_filtrados = []
+    
+    # Agregar moléculas únicas si corresponde
+    if tipo_molecula in ["Todas", "Solo Únicas"]:
+        for molecula in info_pais['moleculas_unicas']:
+            if not buscar_texto or buscar_texto.lower() in molecula.lower():
+                datos_filtrados.append({
+                    'Molécula': molecula,
+                    'Tipo': 'Única',
+                    'Países_Compartida': 0,
+                    'Otros_Países': 'N/A'
+                })
+    
+    # Agregar moléculas compartidas si corresponde
+    if tipo_molecula in ["Todas", "Solo Compartidas"]:
+        for mol_info in info_pais['moleculas_mas_compartidas']:
+            if mol_info['Número_Países'] >= min_colaboradores:
+                if not buscar_texto or buscar_texto.lower() in mol_info['Molécula'].lower():
+                    datos_filtrados.append({
+                        'Molécula': mol_info['Molécula'],
+                        'Tipo': 'Compartida',
+                        'Países_Compartida': mol_info['Número_Países'],
+                        'Otros_Países': mol_info['Otros_Países']
+                    })
+    
+    # Mostrar resultados
+    if datos_filtrados:
+        df_filtrado = pd.DataFrame(datos_filtrados)
+        st.markdown(f"**Resultados encontrados:** {len(df_filtrado)} moléculas")
+        st.dataframe(df_filtrado, height=400)
+        
+        # Opción de descarga
+        csv = df_filtrado.to_csv(index=False)
+        st.download_button(
+            label="💾 Descargar resultados como CSV",
+            data=csv,
+            file_name=f"moleculas_{pais_seleccionado.replace(' ', '_')}.csv",
+            mime="text/csv"
         )
+    else:
+        st.info("No se encontraron moléculas con los filtros aplicados.")
     
-    # Aplicar filtros
-    df_filtrado = df_compartidas.copy()
-    
-    if pais_filtro != 'Todos':
-        df_filtrado = df_filtrado[df_filtrado['Países'].str.contains(pais_filtro)]
-    
-    df_filtrado = df_filtrado[df_filtrado['Países'].apply(lambda x: len(x.split(',')) >= min_paises)]
-    
-    # Mostrar tabla filtrada
-    st.subheader(f"📋 Resultados Filtrados ({len(df_filtrado)} moléculas)")
-    st.dataframe(df_filtrado, height=300)
-    
-    # Estadísticas finales
+    # SECCIÓN 5: ANÁLISIS COMPARATIVO
     st.markdown("---")
-    st.subheader("📈 Estadísticas Adicionales")
+    st.markdown("### ⚖️ Análisis Comparativo")
     
-    col7, col8, col9, col10 = st.columns(4)
+    # Calcular estadísticas globales para comparar
+    total_paises = len(todos_los_paises)
     
-    with col7:
-        st.metric("Total Países", len(paises_count))
+    # Estadísticas del país vs promedio
+    col_comp1, col_comp2, col_comp3 = st.columns(3)
     
-    with col8:
-        promedio_paises = np.mean(paises_por_molecula)
-        st.metric("Promedio Países/Molécula", f"{promedio_paises:.1f}")
+    with col_comp1:
+        # Diversidad molecular (ratio único/total)
+        total_mol_pais = info_pais['cantidad_unicas'] + info_pais['total_compartidas']
+        diversidad_pais = (info_pais['cantidad_unicas'] / total_mol_pais * 100) if total_mol_pais > 0 else 0
+        
+        st.metric(
+            label="🎯 Diversidad Molecular",
+            value=f"{diversidad_pais:.1f}%",
+            help="Porcentaje de moléculas únicas respecto al total"
+        )
     
-    with col9:
-        max_compartidas = max(paises_por_molecula)
-        st.metric("Máximo Países por Molécula", max_compartidas)
+    with col_comp2:
+        # Índice de colaboración
+        indice_colaboracion = (info_pais['paises_colaboradores'] / total_paises * 100) if total_paises > 0 else 0
+        
+        st.metric(
+            label="🤝 Índice de Colaboración",
+            value=f"{indice_colaboracion:.1f}%",
+            help="Porcentaje de países con los que colabora"
+        )
     
-    with col10:
-        total_unicas = df_unicas['Cantidad de moléculas únicas'].sum()
-        st.metric("Total Moléculas Únicas", total_unicas)
+    with col_comp3:
+        # Promedio de países por molécula compartida
+        if info_pais['moleculas_mas_compartidas']:
+            promedio_paises = np.mean([mol['Número_Países'] for mol in info_pais['moleculas_mas_compartidas']])
+            st.metric(
+                label="📊 Promedio Colaboradores/Molécula",
+                value=f"{promedio_paises:.1f}",
+                help="Promedio de países con los que comparte cada molécula"
+            )
+        else:
+            st.metric(
+                label="📊 Promedio Colaboradores/Molécula",
+                value="0.0"
+            )
 
 else:
     st.error("No se pudieron cargar los datos. Asegúrate de que el archivo 'Resumen_similitud_moleculas.xlsx' esté en el directorio correcto.")
@@ -277,4 +485,5 @@ else:
 
 # Footer
 st.markdown("---")
-st.markdown("*Dashboard creado para análisis de similitud molecular entre países* 🧬")
+st.markdown("*Dashboard molecular centrado en análisis por país* 🧬")
+st.markdown("*Desarrollado para explorar colaboraciones moleculares internacionales*")
