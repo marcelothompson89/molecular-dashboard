@@ -269,7 +269,7 @@ if df_compartidas is not None and df_unicas is not None:
     st.markdown("---")
     
     # SECCIÓN 2: COLABORACIONES CON OTROS PAÍSES
-    st.markdown("### 🤝 Colaboraciones Moleculares")
+    st.markdown("### 🤝 Similitudes con otros países")
     
     if info_pais['colaboraciones']:
         # Top colaboradores
@@ -284,7 +284,7 @@ if df_compartidas is not None and df_unicas is not None:
                 x=list(top_colaboradores.values()),
                 y=list(top_colaboradores.keys()),
                 orientation='h',
-                title=f"Top Países que Colaboran con {pais_seleccionado}",
+                title=f"Top países con las mismas moléculas que {pais_seleccionado}",
                 labels={'x': 'Moléculas Compartidas', 'y': 'País'},
                 color=list(top_colaboradores.values()),
                 color_continuous_scale='viridis'
@@ -293,9 +293,9 @@ if df_compartidas is not None and df_unicas is not None:
             st.plotly_chart(fig_collab, use_container_width=True)
         
         with col_collab2:
-            st.markdown("#### 🔍 Explorar Colaboración")
+            st.markdown("#### 🔍 Explorar Similitudes")
             pais_colaborador = st.selectbox(
-                "Selecciona un país colaborador:",
+                "Selecciona un país con similitudes:",
                 list(top_colaboradores.keys())
             )
             
@@ -312,7 +312,7 @@ if df_compartidas is not None and df_unicas is not None:
                 if len(info_pais['moleculas_por_colaboracion'][pais_colaborador]) > 5:
                     st.write(f"... y {len(info_pais['moleculas_por_colaboracion'][pais_colaborador]) - 5} más")
     else:
-        st.warning(f"**{pais_seleccionado}** no tiene colaboraciones moleculares registradas.")
+        st.warning(f"**{pais_seleccionado}** no tiene similitudes moleculares registradas.")
     
     st.markdown("---")
     
@@ -459,7 +459,7 @@ if df_compartidas is not None and df_unicas is not None:
         indice_colaboracion = (info_pais['paises_colaboradores'] / total_paises * 100) if total_paises > 0 else 0
         
         st.metric(
-            label="🤝 Índice de Colaboración",
+            label="🤝 Índice de Similitud",
             value=f"{indice_colaboracion:.1f}%",
             help="Porcentaje de países con los que colabora"
         )
